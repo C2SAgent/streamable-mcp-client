@@ -1,26 +1,37 @@
 import asyncio
 import json
 import logging
-import os
 import re
 import shutil
 from typing import AsyncGenerator
 
-from dotenv import load_dotenv
 from fastmcp import Client
 from mcp.types import TextContent, Tool
-from openai import AsyncOpenAI
 import datetime
 
-from src.llm_client import LLMClient
+from openai import AsyncOpenAI
 
+class LLMClient:
+    @staticmethod
+    async def get_stream_response_reasion_and_content(
+        messages: list[dict[str, str]], llm_url, api_key
+    ) -> AsyncGenerator[str, None]:
+        
+        client: AsyncOpenAI = AsyncOpenAI(api_key=api_key, base_url=llm_url)
 
-class ChatSession:
-    def __init__(self, servers: dict[str, Client]):
-        self.servers: dict[str, Client] = servers
-        self.server_name: str = None
+        response = await client.chat.completions.create(
+            messages=messages, stream=True, model="deepseek-reasoner"
+        )
+        async for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.reasoning_content:
+                yield {"type": "thought", "content": delta.reasoning_content}
+            if delta.content:
+                yield {"type": "text", "content": delta.content}
 
-    async def process_llm_response(self, llm_response: str) -> str:
+class StreamableLLMClient:
+    @staticmethod
+    async def process_llm_response(llm_response: str) -> str:
         try:
             json_match = re.search(r"\[.*?\]", llm_response, re.DOTALL)
             if json_match:
@@ -97,8 +108,10 @@ class ChatSession:
             Arguments:
             {chr(10).join(args_desc)}
         """
+
+    @staticmethod
     async def _get_agent_response_streaming(
-        self, messages, llm_url, api_key
+        messages, llm_url, api_key
     ) -> AsyncGenerator[str, None]:
         
         mcp_config = {
@@ -121,7 +134,7 @@ class ChatSession:
                 tools = await server.list_tools()
                 tools_description += f"Service name: {server_name}\n"
                 tools_description += "\n".join(
-                    [self.format_for_llm(tool) for tool in tools]
+                    [StreamableLLMClient.format_for_llm(tool) for tool in tools]
                 )
 
         system_message = (
@@ -175,13 +188,13 @@ class ChatSession:
             "content": "\n",
         }
 
-        result = await self.process_llm_response(llm_response)
+        result = await StreamableLLMClient.process_llm_response(llm_response)
         while result != llm_response:
             messages.append({"role": "assistant", "content": llm_response})
             messages.append({"role": "user", "content": result})
             llm_response = ""
-            async for chunk in self.llm_client.get_stream_response_reasion_and_content(
-                messages, self.llm_client.llm_url, self.llm_client.api_key
+            async for chunk in LLMClient.get_stream_response_reasion_and_content(
+                messages, llm_url, api_key
             ):
                 if chunk["type"] == "text":
                     llm_response += chunk["content"]
@@ -196,7 +209,7 @@ class ChatSession:
                 "content": "\n",
             }
             logging.info(f"\nAssistant: {llm_response}")
-            result = await self.process_llm_response(llm_response)
+            result = await StreamableLLMClient.process_llm_response(llm_response)
 
         yield {"is_task_complete": True, "require_user_input": False, "content": result}
 
