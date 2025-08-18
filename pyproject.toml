@@ -1,0 +1,11 @@
+[project]
+name = "streamable-mcp-client"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=2.11.3",
+    "mcp>=1.13.0",
+    "openai>=1.99.9",
+]
