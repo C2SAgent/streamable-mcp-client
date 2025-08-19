@@ -186,20 +186,17 @@ class StreamableLLMClient:
 def extract_text_contents(obj):
     text_contents = []
     
-    # 如果是 TextContent，直接提取 text
     if isinstance(obj, TextContent):
         text_contents.append(obj.text)
     
-    # 如果是可迭代对象（如 list、tuple），递归遍历
     elif isinstance(obj, (list, tuple)):
         for item in obj:
             text_contents.extend(extract_text_contents(item))
     
-    # 如果是字典或类似对象（如 dataclass、namedtuple），递归遍历值
-    elif hasattr(obj, '__dict__'):  # 普通对象
+    elif hasattr(obj, '__dict__'):  
         for value in obj.__dict__.values():
             text_contents.extend(extract_text_contents(value))
-    elif isinstance(obj, dict):  # 字典
+    elif isinstance(obj, dict):  
         for value in obj.values():
             text_contents.extend(extract_text_contents(value))
     
