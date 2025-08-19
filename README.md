@@ -6,29 +6,38 @@ You just send mcp_servers_config, messages, llm model name, llm base url and llm
 
 ## 💡 Example Usage for DeepSeek
 ```python
-mcp_servers_config = {
-  "mcpServers": {
-    "test_server": {
-      "command": "streamablehttp",
-      "url": "http://localhost:3000/mcp"
-    }
-  }
-}
+import asyncio
+from src.streamable_mcp_client.client import StreamableLLMClient
 
-messages = [{"role": "user", "content": "how are you?"}]
-llm_model_name = "deepseek-chat"
-llm_base_url = "https://api.deepseek.com/v1"
-llm_api_key = "YOUR_API_KEY"
+async def main():
+    mcp_servers_config = {
+        "mcpServers": {
+            "test_server": {
+                "command": "streamablehttp",
+                "url": "http://localhost:3000/mcp" # your mcp url
+            }
+        }
+    } # your mcp config
 
-async for result in StreamableLLMClient._get_agent_response_streaming(
-    mcp_config=mcp_servers_config, 
-    messages=messages,
-    model_name=llm_model_name, 
-    base_url=llm_base_url, 
-    api_key=llm_api_key
-):
-    print(result)
+    messages = [{"role": "user", "content": "Help me to call the test_server"}]
+    llm_model_name = "deepseek-chat" # your model name
+    llm_url = "https://api.deepseek.com/v1" # your llm url
+    llm_api_key = "your_api_key" # your llm api key
 
+    try:
+        async for result in StreamableLLMClient._get_agent_response_streaming(
+            mcp_config=mcp_servers_config, 
+            messages=messages,
+            model_name=llm_model_name, 
+            llm_url=llm_url, 
+            api_key=llm_api_key
+        ):
+            print(result["content"], end="")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
 # result: {"is_task_complete": bool, "require_user_input": bool, "content": "streaming response"}
 
 ```
