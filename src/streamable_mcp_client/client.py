@@ -206,7 +206,7 @@ def parse_mcp_client(config: dict[str, any]):
             return Client(
                 SSETransport(
                     url=config["url"],
-                    headers={"Authorization": f"Bearer {config['api_key'] if config.get("api_key") else ''}"},
+                    headers={"Authorization": f"Bearer {config['api_key'] if config.get('api_key') else ''}"},
                     sse_read_timeout=config["sse_read_timeout"] if config.get("sse_read_timeout") else 60,
                 )
             )
