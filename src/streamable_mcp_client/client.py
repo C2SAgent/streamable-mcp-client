@@ -1,11 +1,13 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from typing import AsyncGenerator
 
 from fastmcp import Client
+from fastmcp.client.transports import StdioTransport, StreamableHttpTransport, SSETransport
 from mcp.types import TextContent, Tool
 import datetime
 
@@ -14,24 +16,25 @@ from openai import AsyncOpenAI
 class LLMClient:
     @staticmethod
     async def get_stream_response_reasion_and_content(
-        messages: list[dict[str, str]], llm_url, api_key
+        messages: list[dict[str, str]], model_name: str, llm_url: str, api_key: str
     ) -> AsyncGenerator[str, None]:
         
         client: AsyncOpenAI = AsyncOpenAI(api_key=api_key, base_url=llm_url)
 
         response = await client.chat.completions.create(
-            messages=messages, stream=True, model="deepseek-reasoner"
+            messages=messages, stream=True, model=model_name
         )
         async for chunk in response:
             delta = chunk.choices[0].delta
-            if delta.reasoning_content:
-                yield {"type": "thought", "content": delta.reasoning_content}
+            if hasattr(delta, 'reasoning_content'):
+                if delta.reasoning_content:
+                    yield {"type": "thought", "content": delta.reasoning_content}
             if delta.content:
                 yield {"type": "text", "content": delta.content}
 
 class StreamableLLMClient:
     @staticmethod
-    async def process_llm_response(llm_response: str) -> str:
+    async def process_llm_response(mcp_config, llm_response: str) -> str:
         try:
             json_match = re.search(r"\[.*?\]", llm_response, re.DOTALL)
             if json_match:
@@ -46,14 +49,7 @@ class StreamableLLMClient:
                 if "tool" in tool_call and "arguments" in tool_call:
                     logging.info(f"Executing tool: {tool_call['tool']}")
                     logging.info(f"With arguments: {tool_call['arguments']}")
-                    mcp_config = {
-                        "mcpServers": {
-                            "test_server": {
-                                "command": "url",
-                                "url": f"http://localhost:3000/mcp",
-                            }
-                        }
-                    }
+
                     mcp_servers = {
                         server_name: parse_mcp_client(config)
                         for server_name, config in mcp_config["mcpServers"].items()
@@ -111,17 +107,8 @@ class StreamableLLMClient:
 
     @staticmethod
     async def _get_agent_response_streaming(
-        messages, llm_url, api_key
+        mcp_config, messages, model_name, llm_url, api_key
     ) -> AsyncGenerator[str, None]:
-        
-        mcp_config = {
-            "mcpServers": {
-                "test_server": {
-                    "command": "url",
-                    "url": f"http://localhost:3000/mcp",
-                }
-            }
-        }
 
         mcp_servers = {
             server_name: parse_mcp_client(config)
@@ -139,7 +126,7 @@ class StreamableLLMClient:
 
         system_message = (
             "You are a helpful assistant  have access to these services and the tools they offer:\n\n"
-            # 工具描述prompt
+
             f"{tools_description}\n"
             "Choose the appropriate tool based on the user's question. "
             "If no tool is needed, reply directly.\n\n"
@@ -158,7 +145,7 @@ class StreamableLLMClient:
             "    }\n"
             "},]\n\n"
             "When using the tool, user will return the result, so please be careful to distinguish it.\n"
-            # 时间处理prompt
+
             f"When the user does not provide a specific date, the system uses {datetime.date.today()} as the baseline to coumpute the target date based on the user's intent"
             "The dates/times you provide should must match the user's input exactly, be factually accurate, and must not fabricate false dates."
             "After receiving a tool's response:\n"
@@ -171,30 +158,12 @@ class StreamableLLMClient:
         )
         messages = [{"role": "system", "content": system_message}] + messages
 
-        llm_response = ""
-        async for chunk in LLMClient.get_stream_response_reasion_and_content(
-            messages, llm_url, api_key
-        ):
-            if chunk["type"] == "text":
-                llm_response += chunk["content"]
-            yield {
-                "is_task_complete": False,
-                "require_user_input": False,
-                "content": chunk["content"],
-            }
-        yield {
-            "is_task_complete": False,
-            "require_user_input": False,
-            "content": "\n",
-        }
-
-        result = await StreamableLLMClient.process_llm_response(llm_response)
+        result = "start_process_llm_response"
+        llm_response = "start_llm_response"
         while result != llm_response:
-            messages.append({"role": "assistant", "content": llm_response})
-            messages.append({"role": "user", "content": result})
             llm_response = ""
             async for chunk in LLMClient.get_stream_response_reasion_and_content(
-                messages, llm_url, api_key
+                messages, model_name, llm_url, api_key
             ):
                 if chunk["type"] == "text":
                     llm_response += chunk["content"]
@@ -209,13 +178,45 @@ class StreamableLLMClient:
                 "content": "\n",
             }
             logging.info(f"\nAssistant: {llm_response}")
-            result = await StreamableLLMClient.process_llm_response(llm_response)
+            result = await StreamableLLMClient.process_llm_response(mcp_config, llm_response)
+            
+            messages.append({"role": "assistant", "content": llm_response})
+            messages.append({"role": "user", "content": result})
 
         yield {"is_task_complete": True, "require_user_input": False, "content": result}
 
 
 def parse_mcp_client(config: dict[str, any]):
-    command = shutil.which("npx") if config["command"] == "npx" else config["command"]
+    
+    command = config["command"]
     if command is None:
         raise ValueError("Command not found")
-    return Client(config["url"])
+    
+    match command:
+        case "streamablehttp":
+            return Client(
+                StreamableHttpTransport(
+                    url=config["url"],
+                    headers={"Authorization": f"Bearer {config['api_key'] if config.get("api_key") else ''}"},
+                    sse_read_timeout=config["sse_read_timeout"] if config.get("sse_read_timeout") else 60,
+                )
+            )
+            
+        case "sse":
+            return Client(
+                SSETransport(
+                    url=config["url"],
+                    headers={"Authorization": f"Bearer {config['api_key'] if config.get("api_key") else ''}"},
+                    sse_read_timeout=config["sse_read_timeout"] if config.get("sse_read_timeout") else 60,
+                )
+            )
+        
+        case "npx" | "uv" | "uvx":
+            resolved = shutil.which(command)
+            return Client(
+                StdioTransport(
+                    command=resolved,
+                    args=config["args"],
+                    env={**os.environ, **config["env"]} if config.get("env") else None,
+                )
+            )
